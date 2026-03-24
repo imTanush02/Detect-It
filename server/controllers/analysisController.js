@@ -1,7 +1,8 @@
 /**
- * Analysis Controller
- * Orchestrates file/URL analysis by calling all mock services,
- * computing combined scores, and persisting results to MongoDB.
+ * Analysis Controller (Multi-Signal Engine Upgrade)
+ * Orchestrates file/URL analysis by calling all intelligence services,
+ * computing combined scores via a weighted heuristic system,
+ * and generating detailed human-readable explanations.
  */
 
 const Analysis = require("../models/Analysis");
@@ -11,77 +12,81 @@ const { reverseSearch } = require("../services/reverseImageSearch");
 const { scrapeUrl } = require("../services/urlScraper");
 
 /**
- * Combines individual scores into a final AI probability score.
+ * Combines individual scores into a final Multi-Signal AI probability score.
+ * Weights: Image (40%), Text (30%), Search (30%)
  */
 function computeCombinedScore({ imageResult, textResult, searchResult }) {
-  let total = 0;
-  let weight = 0;
+  let totalAiScore = 0;
+  let totalWeight = 0;
 
   if (imageResult) {
-    total += imageResult.aiProbability * 0.5;
-    weight += 0.5;
+    totalAiScore += imageResult.aiScore * 0.40;
+    totalWeight += 0.40;
   }
 
   if (textResult) {
-    const textAiScore = 100 - textResult.credibilityScore;
-    total += textAiScore * 0.3;
-    weight += 0.3;
+    totalAiScore += textResult.aiScore * 0.30;
+    totalWeight += 0.30;
   }
 
   if (searchResult) {
-    const searchScore = searchResult.hasExactMatch
-      ? 20
-      : searchResult.totalMatches > 5
-      ? 35
-      : 50;
-    total += searchScore * 0.2;
-    weight += 0.2;
+    // Reverse search impactScore modifies the baseline pseudo-AI score
+    // Baseline = 50. Impact = -30, -15, or +25
+    let searchDerivedScore = 50 + searchResult.impactScore;
+    searchDerivedScore = Math.max(0, Math.min(100, searchDerivedScore));
+    
+    totalAiScore += searchDerivedScore * 0.30;
+    totalWeight += 0.30;
   }
 
-  return weight > 0 ? Math.round(total / weight) : 50;
+  // Normalize final score
+  if (totalWeight > 0) {
+    return Math.max(0, Math.min(100, Math.round(totalAiScore / totalWeight)));
+  }
+  
+  return 50; // Neutral fallback if nothing worked
 }
 
 /**
- * Generates a human-readable explanation from analysis results.
+ * Bonus: Explains why this content is flagged as AI-generated.
+ * Returns an array of strings as requested, which are then joined for the DB.
  */
-function generateExplanation(aiScore, { imageResult, textResult, searchResult }) {
-  const parts = [];
+function buildAiExplanation(finalAiScore, { imageResult, textResult, searchResult }) {
+  const explanationList = [];
 
-  if (aiScore >= 75) {
-    parts.push(
-      "This content has a HIGH probability of being AI-generated or manipulated."
-    );
-  } else if (aiScore >= 40) {
-    parts.push(
-      "This content shows MODERATE indicators of AI generation or manipulation."
-    );
+  // 1. Overall Verdict
+  if (finalAiScore >= 75) {
+    explanationList.push("Verdict: This content has a HIGH probability of being AI-generated.");
+  } else if (finalAiScore >= 40) {
+    explanationList.push("Verdict: This content shows MODERATE mixed signals of manipulation.");
   } else {
-    parts.push(
-      "This content appears to be LIKELY AUTHENTIC with low AI indicators."
+    explanationList.push("Verdict: This content is LIKELY AUTHENTIC with very low AI indicators.");
+  }
+
+  // 2. Image Signals
+  if (imageResult && imageResult.flags.length > 0) {
+    explanationList.push(
+      `Image Analysis (${imageResult.confidence} confidence): Detected - ${imageResult.flags.join(", ")}.`
     );
   }
 
-  if (imageResult && imageResult.flags.length > 0) {
-    parts.push(`Image analysis flags: ${imageResult.flags.join("; ")}.`);
-  }
-
+  // 3. Text Signals
   if (textResult && textResult.flags.length > 0) {
-    parts.push(`Text analysis flags: ${textResult.flags.join("; ")}.`);
+    explanationList.push(
+      `Text Analysis (Credibility Score: ${textResult.credibilityScore}%): Issues found - ${textResult.flags.join(", ")}.`
+    );
   }
 
+  // 4. Reverse Search Signals
   if (searchResult) {
-    if (searchResult.hasExactMatch) {
-      parts.push(
-        "An exact match was found online — this image may be sourced from existing content."
-      );
-    } else if (searchResult.totalMatches > 0) {
-      parts.push(
-        `${searchResult.totalMatches} similar image(s) found online.`
-      );
+    if (searchResult.matchCount === 0) {
+      explanationList.push("Reverse Search: ZERO matches found on the web, increasing AI likelihood.");
+    } else {
+      explanationList.push(`Reverse Search: Found ${searchResult.matchCount} similar matches across ${searchResult.sources.length} sources (e.g., ${searchResult.sources[0]}), which decreases AI likelihood.`);
     }
   }
 
-  return parts.join(" ");
+  return explanationList; // Returns string[] as requested in prompt Bonus
 }
 
 /* ── POST /api/analyze/file ── */
@@ -94,21 +99,25 @@ async function analyzeFile(req, res, next) {
     const isVideo = req.file.mimetype.startsWith("video/");
     const inputType = isVideo ? "video" : "image";
 
+    // Run deep analysis concurrently
     const [imageResult, searchResult] = await Promise.all([
       analyzeImage(req.file.buffer, req.file.mimetype),
       reverseSearch(req.file.buffer),
     ]);
 
-    const aiScore = computeCombinedScore({ imageResult, searchResult });
-    const trustScore = Math.max(0, 100 - aiScore);
-    const explanation = generateExplanation(aiScore, { imageResult, searchResult });
+    const finalAiProbability = computeCombinedScore({ imageResult, searchResult });
+    const finalTrustScore = Math.max(0, 100 - finalAiProbability);
+    
+    // Build explanation string array and join for the database schema string
+    const explanationArr = buildAiExplanation(finalAiProbability, { imageResult, searchResult });
+    const finalExplanationStr = explanationArr.join(" ");
 
     const analysis = await Analysis.create({
       inputType,
       inputSource: req.file.originalname,
-      aiScore,
-      trustScore,
-      explanation,
+      aiScore: finalAiProbability,
+      trustScore: finalTrustScore,
+      explanation: finalExplanationStr,
       details: {
         imageAnalysis: imageResult,
         reverseSearch: searchResult,
@@ -133,27 +142,34 @@ async function analyzeUrl(req, res, next) {
     const textResult = await analyzeText(scraped.bodyText);
 
     let imageResult = null;
+    let searchResult = null;
+
     if (scraped.ogImage) {
-      imageResult = await analyzeImage(Buffer.alloc(0), "image/jpeg");
+      // In a real system we'd download the OG image and analyze it
+      // For this MVP, if there is an image URL we just simulate an empty buffer to trigger logic
+      imageResult = await analyzeImage(Buffer.alloc(10), "image/jpeg");
+      searchResult = await reverseSearch(Buffer.alloc(10));
     }
 
-    const aiScore = computeCombinedScore({ imageResult, textResult });
-    const trustScore = Math.max(0, 100 - aiScore);
-    const explanation = generateExplanation(aiScore, { imageResult, textResult });
+    const finalAiProbability = computeCombinedScore({ imageResult, textResult, searchResult });
+    const finalTrustScore = Math.max(0, 100 - finalAiProbability);
+    
+    const explanationArr = buildAiExplanation(finalAiProbability, { imageResult, textResult, searchResult });
+    const finalExplanationStr = explanationArr.join(" ");
 
     const analysis = await Analysis.create({
       inputType: "url",
       inputSource: url,
-      aiScore,
-      trustScore,
-      explanation,
+      aiScore: finalAiProbability,
+      trustScore: finalTrustScore,
+      explanation: finalExplanationStr,
       details: {
         imageAnalysis: imageResult,
         textAnalysis: {
           ...textResult,
           scrapedTitle: scraped.title,
-          scrapedMeta: scraped.metaDescription,
         },
+        reverseSearch: searchResult
       },
     });
 

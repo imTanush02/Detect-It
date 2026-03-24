@@ -1,145 +1,115 @@
-# DetectIt — AI-Powered Content Verification Tool
+# DetectIt — AI-Powered Content Verification Tool (MVP Report)
 
-A full-stack MVP for detecting AI-generated images, videos, and web content. Upload files or paste URLs, and get an instant AI probability score with detailed analysis.
+Welcome to **DetectIt**, a full-stack MVP designed to detect AI-generated images, videos, and web content. 
 
-## Tech Stack
+This document serves as a complete report of the **current condition** of the application, how it functions internally, its folder structure, and how to run it.
 
-| Layer        | Technology                              |
-| ------------ | --------------------------------------- |
-| Frontend     | React 18 + Vite + Tailwind CSS         |
-| Backend      | Node.js + Express                       |
-| Database     | MongoDB + Mongoose                      |
-| File Upload  | Multer (memory storage)                 |
-| URL Scraping | Axios + Cheerio                         |
-| AI Analysis  | Mock services (pluggable for real APIs) |
+---
 
-## Folder Structure
+## 🏗️ 1. Current Condition & State of the App
 
-```
+**Status:** The application's core frontend and backend architecture is **100% complete and fully functional**. However, the actual AI detection logic is currently using **Dummy/Mock services**.
+
+### How it works right now (The "Dummy" Data):
+Since we haven't integrated paid APIs (like Hive or OpenAI) yet, the backend simulates the analysis process:
+
+*   **Image/Video Analysis (`imageAnalysis.js`):** It uses a random number generator (`Math.random()`) to calculate the "AI Probability Score". Based on how high this random score is, it attaches fake but realistic-sounding flags like *"GAN artifacts detected"* or *"Unusual texture patterns"*.
+*   **Text/URL Analysis (`urlScraper.js` & `textAnalysis.js`):** It successfully scrapes the real text from the provided URL. But for analysis, instead of a real AI model, it uses basic rules. For example, if it finds clickbait words ("shocking", "breaking") or too many capital letters, it lowers the credibility score. 
+*   **Reverse Image Search (`reverseImageSearch.js`):** It simulates a search and randomly returns 0 to 5 "matches" from fake sources like unsplash.com or gettyimages.com.
+
+**Overall Score:** The `analysisController.js` combines these mock results to generate the final 0-100% "AI Score" and "Trust Score" shown on the UI.
+
+---
+
+## 📂 2. Complete Folder Structure
+
+Here is the exact layout of the codebase and what each part does:
+
+```text
 Detect-It/
-├── client/                  # React frontend
+├── client/                      # 🎨 REACT FRONTEND (Vite + Tailwind)
 │   ├── src/
-│   │   ├── api/             # Axios API layer
-│   │   ├── components/      # Reusable UI components
-│   │   │   ├── Navbar.jsx
-│   │   │   ├── UploadZone.jsx
-│   │   │   ├── UrlInput.jsx
-│   │   │   ├── ScoreGauge.jsx
-│   │   │   ├── ResultCard.jsx
-│   │   │   └── LoadingOverlay.jsx
-│   │   ├── pages/           # Route pages
-│   │   │   ├── Home.jsx
-│   │   │   ├── History.jsx
-│   │   │   └── ResultDetail.jsx
-│   │   ├── App.jsx
-│   │   ├── main.jsx
-│   │   └── index.css
-│   ├── index.html
-│   ├── vite.config.js
-│   └── tailwind.config.js
+│   │   ├── api/                 # Axios configuration for calling backend
+│   │   │   └── index.js         # Contains functions like analyzeFile(), analyzeUrl()
+│   │   ├── components/          # Reusable UI parts
+│   │   │   ├── LoadingOverlay.jsx # The cool scanner animation
+│   │   │   ├── Navbar.jsx         # Top navigation bar
+│   │   │   ├── ResultCard.jsx     # Card shown in the History page
+│   │   │   ├── ScoreGauge.jsx     # The animated circular score meter
+│   │   │   ├── UploadZone.jsx     # Drag-and-drop file upload box
+│   │   │   └── UrlInput.jsx       # Input field for pasting URLs
+│   │   ├── pages/               # Main application pages
+│   │   │   ├── History.jsx        # Shows all past analyses from Database
+│   │   │   ├── Home.jsx           # Landing page with upload/URL inputs
+│   │   │   └── ResultDetail.jsx   # Detailed view of a specific analysis score
+│   │   ├── App.jsx              # Main routing component
+│   │   ├── main.jsx             # React application entry point
+│   │   └── index.css            # Global Tailwind styling & animations
+│   ├── index.html               # Main HTML file
+│   └── tailwind.config.js       # UI Theme & custom animation configs
 │
-└── server/                  # Express backend
-    ├── controllers/         # Request handlers
-    │   └── analysisController.js
-    ├── middleware/           # Express middleware
-    │   ├── upload.js
-    │   └── errorHandler.js
-    ├── models/              # Mongoose schemas
-    │   └── Analysis.js
-    ├── routes/              # API routes
-    │   └── analysis.js
-    ├── services/            # Analysis engines (mock)
-    │   ├── imageAnalysis.js
-    │   ├── textAnalysis.js
-    │   ├── urlScraper.js
-    │   └── reverseImageSearch.js
-    └── index.js             # Entry point
+└── server/                      # ⚙️ NODE.JS + EXPRESS BACKEND
+    ├── controllers/             # Handles the logic for API requests
+    │   └── analysisController.js# Combines scores, generates explanation, saves to DB
+    ├── middleware/              # Functions that run before controllers
+    │   ├── errorHandler.js      # Catches and formats all server errors
+    │   └── upload.js            # Multer config (handles 50MB file uploads in memory)
+    ├── models/                  # MongoDB Database Schemas
+    │   └── Analysis.js          # Defines how a result is saved in DB
+    ├── routes/                  # Defines all API endpoints
+    │   └── analysis.js          # POST /api/analyze/file, GET /api/history, etc.
+    ├── services/                # 🚨 THE MOCK AI ENGINES
+    │   ├── imageAnalysis.js     # Generates dummy image AI score
+    │   ├── reverseImageSearch.js# Generates dummy similar image matches
+    │   ├── textAnalysis.js      # Uses heuristics to score text credibility
+    │   └── urlScraper.js        # REAL scraper: fetches HTML and extracts text/title
+    ├── .env                     # Contains PORT and MONGO_URI
+    └── index.js                 # Starts the Express server & connects to MongoDB
 ```
 
-## API Routes
+---
 
-| Method | Endpoint            | Description                       |
-| ------ | ------------------- | --------------------------------- |
-| POST   | `/api/analyze/file` | Upload image/video for analysis   |
-| POST   | `/api/analyze/url`  | Submit URL for scraping & scoring |
-| GET    | `/api/history`      | Paginated analysis history        |
-| GET    | `/api/analysis/:id` | Single analysis details           |
+## 🛠️ 3. Tech Stack
 
-## Sample API Response
+*   **Frontend:** React 18, Vite, Tailwind CSS v3, React Router. (Glassmorphism UI, Dark Mode)
+*   **Backend:** Node.js, Express.js
+*   **Database:** MongoDB (Mongoose for schemas)
+*   **File Handling:** Multer (Memory Storage)
+*   **Web Scraping:** Axios + Cheerio
 
-```json
-{
-  "_id": "6600abc123...",
-  "inputType": "image",
-  "inputSource": "photo.jpg",
-  "aiScore": 72,
-  "trustScore": 28,
-  "explanation": "This content shows MODERATE indicators of AI generation. Image analysis flags: GAN artifacts detected; Unusual texture patterns.",
-  "details": {
-    "imageAnalysis": {
-      "provider": "MockVision",
-      "aiProbability": 78.42,
-      "confidence": 0.91,
-      "flags": ["GAN artifacts detected", "Unusual texture patterns"]
-    },
-    "reverseSearch": {
-      "provider": "MockReverseSearch",
-      "totalMatches": 3,
-      "hasExactMatch": false,
-      "sources": [{ "domain": "unsplash.com", "similarity": 0.87 }]
-    }
-  },
-  "createdAt": "2026-03-24T06:00:00.000Z"
-}
-```
+---
 
-## Getting Started
+## 🚀 4. How to Run Locally
 
 ### Prerequisites
+*   Node.js installed
+*   MongoDB running locally (or adjust the `MONGO_URI` in `server/.env` to a cloud database)
 
-- Node.js 18+
-- MongoDB running locally (or a connection string)
-
-### 1. Setup environment
-
-```bash
-cd server
-cp .env.example .env
-# Edit .env with your MongoDB connection string
-```
-
-### 2. Install & run backend
-
+### Step 1: Start the Backend Server
 ```bash
 cd server
 npm install
-npm run dev
+node index.js
+# Or use 'npm run dev' if you have nodemon
 ```
+*(Runs on `http://localhost:5000`)*
 
-### 3. Install & run frontend
-
+### Step 2: Start the Frontend App
 ```bash
 cd client
 npm install
 npm run dev
 ```
+*(Runs on `http://localhost:3000`)*
 
-The frontend runs on `http://localhost:3000` and proxies API calls to the backend on port `5000`.
+---
 
-## Environment Variables
+## ⏭️ 5. Next Steps (Moving from Dummy to Real)
 
-| Variable     | Default                             | Description         |
-| ------------ | ----------------------------------- | ------------------- |
-| `MONGO_URI`  | `mongodb://localhost:27017/detectit` | MongoDB connection  |
-| `PORT`       | `5000`                              | Backend server port |
+To make this app production-ready with real AI detection, we need to modify the files inside `server/services/`:
 
-## Features
+1.  **`imageAnalysis.js`**: Replace the `Math.random` code with an Axios call to the **Hive AI API** or **Sightengine API**.
+2.  **`textAnalysis.js`**: Send the scraped text to the **OpenAI API (ChatGPT)** with a prompt asking it to score the text for AI-generation likelihood.
+3.  **`reverseImageSearch.js`**: Integrate the **Google Vision API** or **TinEye API** to find real matches on the web.
 
-- 🎯 Upload images/videos with drag-and-drop
-- 🔗 Paste URLs for content scraping & analysis
-- 📊 Animated AI Probability & Trust Score gauges
-- 📝 Detailed explanation with flags per analysis layer
-- 📜 Paginated history dashboard
-- 🌙 Dark-mode glassmorphism UI
-- ⚡ Loading animations during analysis
-- ❌ Comprehensive error handling
+Currently, the architecture is built specifically so that **only these three files need to be changed** to upgrade the app from a Mock MVP to a Real Application. The database, UI, and controllers will handle the real data perfectly.

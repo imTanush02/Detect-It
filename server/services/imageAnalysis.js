@@ -3,8 +3,8 @@ const parser = require("exif-parser");
 const axios = require("axios");
 
 /**
- * Image Analysis Service (Multi-Signal Engine)
- * Analyzes metadata, image processing stats, and optionally hits a free API.
+ * Image Analysis Service (Multi-Signal Engine with HuggingFace ML)
+ * Analyzes metadata, image processing stats, and overrides with a real ML model if available.
  */
 async function analyzeImage(fileBuffer, mimetype) {
   let aiScore = 40; // Base starting score
@@ -12,6 +12,14 @@ async function analyzeImage(fileBuffer, mimetype) {
   let confidence = "Medium";
 
   try {
+    // ----------------------------------------------------
+    // 0. Video Fallback
+    // ----------------------------------------------------
+    if (mimetype.startsWith("video/")) {
+      aiScore = 65;
+      flags.push("Deep video frame extraction bypassed (requires local ffmpeg). Analysis ran on metadata proxies only.");
+    }
+
     // ----------------------------------------------------
     // 1. Metadata Analysis (EXIF Check)
     // ----------------------------------------------------
@@ -22,16 +30,13 @@ async function analyzeImage(fileBuffer, mimetype) {
         const result = parserInstance.parse();
         if (result.tags && Object.keys(result.tags).length > 0) {
           hasExif = true;
-          aiScore -= 15; // Natural photos usually have EXIF
-          // Further check for common camera models vs software generators
+          aiScore -= 15;
           if (result.tags.Software && result.tags.Software.toLowerCase().includes("midjourney")) {
             aiScore += 50;
             flags.push("EXIF Software tag explicitly matches an AI generator");
           }
         }
-      } catch (err) {
-        // Exif parsing failed or not present
-      }
+      } catch (err) {}
     }
 
     if (!hasExif && mimetype.startsWith("image/")) {
@@ -43,57 +48,75 @@ async function analyzeImage(fileBuffer, mimetype) {
     // 2. Image Processing Analysis (Sharp)
     // ----------------------------------------------------
     if (fileBuffer && mimetype.startsWith("image/")) {
-      const img = sharp(fileBuffer);
-      const metadata = await img.metadata();
-      const stats = await img.stats();
+      try {
+        const img = sharp(fileBuffer);
+        const metadata = await img.metadata();
+        const stats = await img.stats();
+        const { width, height } = metadata;
 
-      const { width, height } = metadata;
-
-      // Resolution Anomalies (AI models often output exactly 512, 1024, or 1:1 blocks)
-      if (width === height && (width === 512 || width === 1024)) {
-        aiScore += 20;
-        flags.push(`Resolution anomaly: Exact ${width}x${height} standard AI generation size`);
-      } else if (width > 4000 || height > 4000) {
-        aiScore -= 10; // High-res images from real cameras
-      }
-
-      // Color and Noise Distribution Checks
-      // AI images often have unnaturally smooth color gradients (low variance)
-      if (stats && stats.channels && stats.channels.length >= 3) {
-        const avgStdev =
-          stats.channels.reduce((sum, ch) => sum + ch.stdev, 0) / stats.channels.length;
-          
-        if (avgStdev < 25) {
-          aiScore += 15;
-          flags.push("Unnaturally low color variance/noise (overly smooth textures)");
-        } else if (avgStdev > 70) {
+        if (width === height && (width === 512 || width === 1024)) {
+          aiScore += 20;
+          flags.push(`Resolution anomaly: Exact ${width}x${height} standard AI generation size`);
+        } else if (width > 4000 || height > 4000) {
           aiScore -= 10;
-          flags.push("High natural noise/texture variance detected (photorealistic)");
         }
+
+        if (stats && stats.channels && stats.channels.length >= 3) {
+          const avgStdev =
+            stats.channels.reduce((sum, ch) => sum + ch.stdev, 0) / stats.channels.length;
+            
+          if (avgStdev < 25) {
+            aiScore += 15;
+            flags.push("Unnaturally low color variance/noise (overly smooth textures)");
+          } else if (avgStdev > 70) {
+            aiScore -= 10;
+            flags.push("High natural noise/texture variance detected");
+          }
+        }
+      } catch (err) {
+        console.warn("Sharp parsing error:", err.message);
       }
     }
 
     // ----------------------------------------------------
-    // 3. Free API Integration (Imagga)
+    // 3. HuggingFace Real ML Model Integration 🚀
     // ----------------------------------------------------
-    const { IMAGGA_API_KEY, IMAGGA_API_SECRET } = process.env;
-    if (IMAGGA_API_KEY && IMAGGA_API_SECRET && fileBuffer.length < 4000000) {
+    const { HUGGINGFACE_API_KEY } = process.env;
+    if (HUGGINGFACE_API_KEY && mimetype.startsWith("image/") && fileBuffer.length > 0) {
       try {
-        const auth = Buffer.from(`${IMAGGA_API_KEY}:${IMAGGA_API_SECRET}`).toString("base64");
-        
-        // Convert buffer to base64 for API (some free APIs accept base64 if multipart is complex)
-        // Note: Imagga actually prefers multipart, but for URL or standard uploads we might mock this part 
-        // if keys are missing. Here we'll implement a heuristic mock to simulate the response if real API is missing
-        
-        // Note: For demonstration in MVP, we simulate the API call logic natively if real network fails
-        if (Math.random() > 0.5) throw new Error("API skipped or missing");
+        const hfRes = await axios.post(
+          "https://api-inference.huggingface.co/models/umm-maybe/AI-image-detector",
+          fileBuffer,
+          {
+            headers: {
+              "Authorization": `Bearer ${HUGGINGFACE_API_KEY}`,
+              "Content-Type": mimetype
+            },
+            timeout: 15000 // 15s timeout
+          }
+        );
 
+        let hfScore = null;
+        if (Array.isArray(hfRes.data) && Array.isArray(hfRes.data[0])) {
+          const artificialObj = hfRes.data[0].find(i => i.label === 'artificial');
+          if (artificialObj) hfScore = artificialObj.score * 100;
+        } else if (Array.isArray(hfRes.data)) {
+          const artificialObj = hfRes.data.find(i => i.label === 'artificial');
+          if (artificialObj) hfScore = artificialObj.score * 100;
+        }
+
+        if (hfScore !== null) {
+          aiScore = hfScore; // Override heuristic score completely
+          flags.push(`HuggingFace ML Model: Scored AI likelihood at ${(hfScore).toFixed(1)}%`);
+          confidence = "High"; // Because we used a real model
+        }
       } catch (err) {
-        console.warn("Imagga logic skipped or failed:", err.message);
+        if (err.response?.status === 503) {
+          flags.push("HuggingFace Image Model is waking up (cold start); bypassed for heuristics.");
+        } else {
+          console.warn("HF Image API logic failed:", err.message);
+        }
       }
-    } else {
-      // Fallback heuristic simulation of "tagging" when no API is configured
-      // In a real scenario without keys, we just skip it.
     }
 
   } catch (err) {
@@ -101,12 +124,11 @@ async function analyzeImage(fileBuffer, mimetype) {
     flags.push("Processing error occurred during deep image analysis");
   }
 
-  // ----------------------------------------------------
-  // Output Generation
-  // ----------------------------------------------------
   aiScore = Math.max(0, Math.min(100, Math.round(aiScore)));
-  if (aiScore >= 75 || aiScore <= 25) confidence = "High";
-  else confidence = "Medium";
+  if (confidence !== "High") {
+    if (aiScore >= 75 || aiScore <= 25) confidence = "High";
+    else confidence = "Medium";
+  }
 
   return {
     aiScore,

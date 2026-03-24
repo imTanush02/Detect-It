@@ -1,9 +1,9 @@
 const axios = require("axios");
 
 /**
- * Text / NLP Credibility Service (Multi-Signal Engine)
- * Heuristic-heavy analysis of text content for AI signatures,
- * credibility, and clickbait.
+ * Text / NLP Credibility Service (Multi-Signal Engine with HuggingFace ML)
+ * Heuristic-heavy analysis of text content for AI signatures, credibility,
+ * and clickbait. Overrides AI score with HuggingFace ML if available.
  */
 async function analyzeText(text) {
   let aiScore = 40;       // Starting likelihood it's AI
@@ -11,11 +11,7 @@ async function analyzeText(text) {
   const flags = [];
 
   if (!text || text.trim().length === 0) {
-    return {
-      aiScore: 0,
-      credibilityScore: 0,
-      flags: ["No text content to analyze"],
-    };
+    return { aiScore: 0, credibilityScore: 0, flags: ["No text content to analyze"] };
   }
 
   try {
@@ -31,11 +27,11 @@ async function analyzeText(text) {
     
     if (exclaimCount > 3) {
       credibility -= 10;
-      aiScore -= 5; // AI is usually less sensational than human spam, except when prompted
+      aiScore -= 5;
       flags.push("Excessive exclamation marks detected");
     }
     if (questionCount > 3) {
-      aiScore += 5; // AI sometimes uses rhetoric questions frequently
+      aiScore += 5;
       flags.push("High frequency of rhetorical questions");
     }
 
@@ -43,21 +39,18 @@ async function analyzeText(text) {
     // 2. Capitalization Analysis
     // ----------------------------------------------------
     const words = rawText.split(/\s+/);
-    const allCapsWords = words.filter(
-      (w) => /^[A-Z]{3,}[!?.,]*$/.test(w) // Words with 3+ upper case letters
-    );
+    const allCapsWords = words.filter(w => /^[A-Z]{3,}[!?.,]*$/.test(w));
     const capsRatio = allCapsWords.length / wordCount;
 
     if (capsRatio > 0.1) {
       credibility -= 15;
-      aiScore -= 5; // AI rarely uses excessive ALL CAPS naturally
+      aiScore -= 5;
       flags.push("Excessive ALL CAPS usage");
     }
 
     // ----------------------------------------------------
     // 3. Repeated Phrases & AI Tropes
     // ----------------------------------------------------
-    // AI often uses structural transitions
     const aiTropes = [
       "in conclusion", "it is important to note", "moreover",
       "additionally", "firstly", "delve into", "navigate",
@@ -65,9 +58,7 @@ async function analyzeText(text) {
       "transformative", "let's dive in", "beacon", "landscape"
     ];
     let tropeCount = 0;
-    aiTropes.forEach((trope) => {
-      if (lower.includes(trope)) tropeCount++;
-    });
+    aiTropes.forEach((trope) => { if (lower.includes(trope)) tropeCount++; });
 
     if (tropeCount > 2) {
       aiScore += 25;
@@ -81,7 +72,6 @@ async function analyzeText(text) {
       "shocking", "unbelievable", "you won't believe", "breaking",
       "urgent", "miracle", "secret", "exposed", "outrageous", "mind-blowing"
     ];
-    
     let clickbaitHits = clickbaitWords.filter((w) => lower.includes(w));
     if (clickbaitHits.length > 0) {
       credibility -= 20;
@@ -89,27 +79,43 @@ async function analyzeText(text) {
     }
 
     // ----------------------------------------------------
-    // 5. Repeated Phrase Check (N-gram repetition)
+    // 5. HuggingFace Real ML Model Integration 🚀
     // ----------------------------------------------------
-    // Simple heuristic: Are there identical sequential 4-word phrases?
-    const ngrams = [];
-    for (let i = 0; i < words.length - 3; i++) {
-        ngrams.push(words.slice(i, i + 4).join(" ").toLowerCase());
-    }
-    const ngramSet = new Set(ngrams);
-    if (ngrams.length > 0 && (ngrams.length - ngramSet.size > 2)) {
-      aiScore += 20;
-      credibility -= 10;
-      flags.push("Abnormal repetition of specific 4-word sequences (hallucination loop)");
-    }
+    const { HUGGINGFACE_API_KEY } = process.env;
+    if (HUGGINGFACE_API_KEY && rawText.length > 10) {
+      try {
+        const hfRes = await axios.post(
+          "https://api-inference.huggingface.co/models/roberta-base-openai-detector",
+          { inputs: rawText.slice(0, 512) }, // Limit length for HF payload limits
+          {
+            headers: {
+              "Authorization": `Bearer ${HUGGINGFACE_API_KEY}`,
+              "Content-Type": "application/json"
+            },
+            timeout: 10000
+          }
+        );
 
-    // ----------------------------------------------------
-    // 6. Optional Free API Integration (NLP Cloud)
-    // ----------------------------------------------------
-    const { NLP_CLOUD_KEY } = process.env;
-    if (NLP_CLOUD_KEY) {
-      // In a real scenario, call the sentiment or grammar API
-      // axios.post('https://api.nlpcloud.io/v1/en/grammar', ...)
+        let hfScore = null;
+        if (Array.isArray(hfRes.data) && Array.isArray(hfRes.data[0])) {
+          const fakeObj = hfRes.data[0].find(i => i.label === 'Fake');
+          if (fakeObj) hfScore = fakeObj.score * 100;
+        } else if (Array.isArray(hfRes.data)) {
+          const fakeObj = hfRes.data.find(i => i.label === 'Fake');
+          if (fakeObj) hfScore = fakeObj.score * 100;
+        }
+
+        if (hfScore !== null) {
+          aiScore = hfScore; // Override heuristic entirely
+          flags.push(`HuggingFace ML Model: Scored text AI likelihood at ${(hfScore).toFixed(1)}%`);
+        }
+      } catch (err) {
+        if (err.response?.status === 503) {
+          flags.push("HuggingFace Text Model is waking up (cold start); bypassed for heuristics.");
+        } else {
+          console.warn("HF Text API logic failed:", err.message);
+        }
+      }
     }
 
   } catch (err) {

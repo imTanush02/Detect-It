@@ -1,139 +1,115 @@
-const sharp = require("sharp");
-const parser = require("exif-parser");
 const axios = require("axios");
 
 /**
- * Image Analysis Service (Multi-Signal Engine with HuggingFace ML)
- * Analyzes metadata, image processing stats, and overrides with a real ML model if available.
+ * Helper to call Hugging Face with Retry Logic to handle Cold Starts & Rate Limits
  */
-async function analyzeImage(fileBuffer, mimetype) {
-  let aiScore = 40; // Base starting score
+async function callHF(url, buffer, contentType = "image/jpeg", retries = 1) {
+  try {
+    const res = await axios.post(url, buffer, {
+      headers: {
+        "Authorization": `Bearer ${process.env.HUGGINGFACE_API_KEY}`,
+        "Content-Type": contentType
+      },
+      timeout: 60000 // Increased timeout for heavy HF free tier limits
+    });
+    return { status: "fulfilled", value: res };
+  } catch (err) {
+    if (retries > 0) {
+      console.log(`HF API failed for ${url} (stream aborted/timeout). Retrying...`);
+      return callHF(url, buffer, contentType, retries - 1);
+    }
+    return { status: "rejected", reason: err };
+  }
+}
+
+/**
+ * Image Analysis Service
+ * Uses Google ViT (Classification) and gracefully handles free-tier HF timeouts.
+ */
+async function analyzeImage(fileBuffer, mimetype = "image/jpeg") {
   const flags = [];
-  let confidence = "Medium";
+  let aiScore = 50; 
+  let vitResult = null;
+
+  const { HUGGINGFACE_API_KEY } = process.env;
+
+  if (!HUGGINGFACE_API_KEY) {
+    return {
+      aiScore: 50,
+      flags: ["HUGGINGFACE_API_KEY is missing. Cannot perform ML analysis."],
+      confidence: "low"
+    };
+  }
 
   try {
-    // ----------------------------------------------------
-    // 0. Video Fallback
-    // ----------------------------------------------------
-    if (mimetype.startsWith("video/")) {
-      aiScore = 65;
-      flags.push("Deep video frame extraction bypassed (requires local ffmpeg). Analysis ran on metadata proxies only.");
-    }
+    // 1. Send image buffer to ViT Model (DETR removed for stability per user request)
+    const vitResponse = await callHF(
+      "https://api-inference.huggingface.co/models/google/vit-base-patch16-224", 
+      fileBuffer, 
+      mimetype, 
+      1
+    );
 
-    // ----------------------------------------------------
-    // 1. Metadata Analysis (EXIF Check)
-    // ----------------------------------------------------
-    let hasExif = false;
-    if (mimetype === "image/jpeg" || mimetype === "image/tiff") {
-      try {
-        const parserInstance = parser.create(fileBuffer);
-        const result = parserInstance.parse();
-        if (result.tags && Object.keys(result.tags).length > 0) {
-          hasExif = true;
-          aiScore -= 15;
-          if (result.tags.Software && result.tags.Software.toLowerCase().includes("midjourney")) {
-            aiScore += 50;
-            flags.push("EXIF Software tag explicitly matches an AI generator");
-          }
-        }
-      } catch (err) {}
-    }
-
-    if (!hasExif && mimetype.startsWith("image/")) {
-      aiScore += 20;
-      flags.push("Missing EXIF metadata (common in AI generations or scraped images)");
-    }
-
-    // ----------------------------------------------------
-    // 2. Image Processing Analysis (Sharp)
-    // ----------------------------------------------------
-    if (fileBuffer && mimetype.startsWith("image/")) {
-      try {
-        const img = sharp(fileBuffer);
-        const metadata = await img.metadata();
-        const stats = await img.stats();
-        const { width, height } = metadata;
-
-        if (width === height && (width === 512 || width === 1024)) {
-          aiScore += 20;
-          flags.push(`Resolution anomaly: Exact ${width}x${height} standard AI generation size`);
-        } else if (width > 4000 || height > 4000) {
-          aiScore -= 10;
-        }
-
-        if (stats && stats.channels && stats.channels.length >= 3) {
-          const avgStdev =
-            stats.channels.reduce((sum, ch) => sum + ch.stdev, 0) / stats.channels.length;
-            
-          if (avgStdev < 25) {
-            aiScore += 15;
-            flags.push("Unnaturally low color variance/noise (overly smooth textures)");
-          } else if (avgStdev > 70) {
-            aiScore -= 10;
-            flags.push("High natural noise/texture variance detected");
-          }
-        }
-      } catch (err) {
-        console.warn("Sharp parsing error:", err.message);
+    // Handle ViT Response
+    if (vitResponse.status === "fulfilled" && Array.isArray(vitResponse.value.data)) {
+      vitResult = vitResponse.value.data;
+    } else if (vitResponse.status === "rejected") {
+      const errorMsg = vitResponse.reason.message;
+      console.warn("ViT model error:", errorMsg);
+      // Graceful fallback for timeouts and stream aborts
+      if (errorMsg.includes("aborted") || errorMsg.includes("timeout") || errorMsg.includes("503")) {
+        return {
+          aiScore: 55,
+          flags: ["HF timeout, fallback used", "Model stream aborted or timed out during heavy load."],
+          confidence: "low"
+        };
       }
+      flags.push("Failed to get classification from ViT model.");
     }
 
-    // ----------------------------------------------------
-    // 3. HuggingFace Real ML Model Integration 🚀
-    // ----------------------------------------------------
-    const { HUGGINGFACE_API_KEY } = process.env;
-    if (HUGGINGFACE_API_KEY && mimetype.startsWith("image/") && fileBuffer.length > 0) {
-      try {
-        const hfRes = await axios.post(
-          "https://api-inference.huggingface.co/models/umm-maybe/AI-image-detector",
-          fileBuffer,
-          {
-            headers: {
-              "Authorization": `Bearer ${HUGGINGFACE_API_KEY}`,
-              "Content-Type": mimetype
-            },
-            timeout: 15000 // 15s timeout
-          }
-        );
+    // ----------------------------------------------------------------
+    // 2. Scoring Logic: ViT (Classification)
+    // ----------------------------------------------------------------
+    if (vitResult && vitResult.length > 0) {
+      const topLabel = vitResult[0];
+      const topConfidence = topLabel.score;
 
-        let hfScore = null;
-        if (Array.isArray(hfRes.data) && Array.isArray(hfRes.data[0])) {
-          const artificialObj = hfRes.data[0].find(i => i.label === 'artificial');
-          if (artificialObj) hfScore = artificialObj.score * 100;
-        } else if (Array.isArray(hfRes.data)) {
-          const artificialObj = hfRes.data.find(i => i.label === 'artificial');
-          if (artificialObj) hfScore = artificialObj.score * 100;
-        }
+      if (topConfidence < 0.6) {
+        aiScore = 80; 
+        flags.push(`ViT: Low classification confidence (${(topConfidence * 100).toFixed(1)}% for '${topLabel.label}'). Indicates possible AI chaos.`);
+      } else {
+        aiScore = 20; 
+        flags.push(`ViT: High confidence (${(topConfidence * 100).toFixed(1)}%) in subject '${topLabel.label}'.`);
+      }
 
-        if (hfScore !== null) {
-          aiScore = hfScore; // Override heuristic score completely
-          flags.push(`HuggingFace ML Model: Scored AI likelihood at ${(hfScore).toFixed(1)}%`);
-          confidence = "High"; // Because we used a real model
-        }
-      } catch (err) {
-        if (err.response?.status === 503) {
-          flags.push("HuggingFace Image Model is waking up (cold start); bypassed for heuristics.");
-        } else {
-          console.warn("HF Image API logic failed:", err.message);
+      if (vitResult.length > 1) {
+        const secondConfidence = vitResult[1].score;
+        if (topConfidence - secondConfidence < 0.05) {
+          aiScore += 15; 
         }
       }
+    } else if (!vitResult) {
+      aiScore = 60; // Slightly suspicious if model completely failed without a direct timeout string
+      flags.push("AI models unavailable or returned empty data, fallback heuristic used.");
     }
 
   } catch (err) {
-    console.error("Image analysis error:", err.message);
-    flags.push("Processing error occurred during deep image analysis");
+    console.error("Deep Image Analysis Error:", err.message);
+    flags.push("API communication error. Could not complete full deep analysis.");
   }
 
-  aiScore = Math.max(0, Math.min(100, Math.round(aiScore)));
-  if (confidence !== "High") {
-    if (aiScore >= 75 || aiScore <= 25) confidence = "High";
-    else confidence = "Medium";
-  }
+  // Ensure bounds
+  aiScore = Math.max(0, Math.min(100, aiScore));
+
+  // Smart Confidence System
+  let overallConfidence = "low";
+  if (aiScore > 75) overallConfidence = "high";
+  else if (aiScore > 50) overallConfidence = "medium";
 
   return {
-    aiScore,
+    aiScore: Math.round(aiScore),
     flags,
-    confidence,
+    confidence: overallConfidence
   };
 }
 

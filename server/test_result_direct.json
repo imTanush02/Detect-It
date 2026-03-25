@@ -1,0 +1,8 @@
+{
+  "aiScore": 50,
+  "flags": [
+    "Failed to get classification from ViT model.",
+    "Failed to get object detection from DETR model."
+  ],
+  "confidence": "low"
+}

@@ -11,7 +11,7 @@ async function analyzeText(text) {
   const flags = [];
 
   if (!text || text.trim().length === 0) {
-    return { aiScore: 0, credibilityScore: 0, flags: ["No text content to analyze"] };
+    return null;
   }
 
   try {
@@ -82,10 +82,10 @@ async function analyzeText(text) {
     // 5. HuggingFace Real ML Model Integration 🚀
     // ----------------------------------------------------
     const { HUGGINGFACE_API_KEY } = process.env;
-    if (HUGGINGFACE_API_KEY && rawText.length > 10) {
+    if (false && HUGGINGFACE_API_KEY && rawText.length > 10) { // Bypassed for now per user request
       try {
         const hfRes = await axios.post(
-          "https://api-inference.huggingface.co/models/roberta-base-openai-detector",
+          "https://router.huggingface.co/hf-inference/models/roberta-base-openai-detector",
           { inputs: rawText.slice(0, 512) }, // Limit length for HF payload limits
           {
             headers: {

@@ -25,10 +25,32 @@ app.get("/", (_req, res) => {
 app.use(errorHandler);
 
 /* ── Database + Server ── */
+const warmUp = async () => {
+  const axios = require('axios');
+  try {
+    await axios.post(
+      "https://api-inference.huggingface.co/models/google/vit-base-patch16-224",
+      Buffer.alloc(10), // tiny dummy payload
+      {
+        headers: { Authorization: `Bearer ${process.env.HUGGINGFACE_API_KEY}` },
+        timeout: 10000 // quick timeout for warmup just to wake it
+      }
+    );
+    console.log("🔥 HF ViT Model Warmed up");
+  } catch (e) {
+    if (e.response?.status === 503) {
+      console.log("🔥 HF ViT Model is booting up (expected warmup behavior)");
+    } else {
+      console.log("🔥 HF Warmup ping sent (expected to error on dummy buffer)");
+    }
+  }
+};
+
 mongoose
   .connect(process.env.MONGO_URI)
   .then(() => {
     console.log("✅ MongoDB connected");
+    warmUp(); // Trigger warmup async
     app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
   })
   .catch((err) => {

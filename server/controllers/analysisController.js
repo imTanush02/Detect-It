@@ -1,5 +1,5 @@
 /**
- * Analysis Controller (Multi-Signal Engine Upgrade)
+ * Analysis Controller
  * Orchestrates file/URL analysis by calling all intelligence services,
  * computing combined scores via a weighted heuristic system,
  * and generating detailed human-readable explanations.
@@ -7,51 +7,42 @@
 
 const Analysis = require("../models/Analysis");
 const { analyzeImage } = require("../services/imageAnalysis");
+const { analyzeVideo } = require("../services/videoAnalysis");
 const { analyzeText } = require("../services/textAnalysis");
-const { reverseSearch } = require("../services/reverseImageSearch");
 const { scrapeUrl } = require("../services/urlScraper");
+const axios = require("axios");
 
 /**
  * Combines individual scores into a final Multi-Signal AI probability score.
- * Weights: Image (40%), Text (30%), Search (30%)
  */
-function computeCombinedScore({ imageResult, textResult, searchResult }) {
+function computeCombinedScore({ imageResult, videoResult, textResult }) {
   let totalAiScore = 0;
   let totalWeight = 0;
 
-  if (imageResult) {
-    totalAiScore += imageResult.aiScore * 0.40;
-    totalWeight += 0.40;
+  const primaryResult = imageResult || videoResult;
+
+  // We prioritize the ML model heavily if it was confident.
+  let primaryWeight = (primaryResult && primaryResult.confidence && primaryResult.confidence.toLowerCase() === "high") ? 0.85 : 0.60;
+  let textWeight = 1.0 - primaryWeight;
+
+  if (primaryResult) {
+    totalAiScore += primaryResult.aiScore * primaryWeight;
+    totalWeight += primaryWeight;
   }
 
   if (textResult) {
-    totalAiScore += textResult.aiScore * 0.30;
-    totalWeight += 0.30;
+    totalAiScore += textResult.aiScore * textWeight;
+    totalWeight += textWeight;
   }
 
-  if (searchResult) {
-    // Reverse search impactScore modifies the baseline pseudo-AI score
-    // Baseline = 50. Impact = -30, -15, or +25
-    let searchDerivedScore = 50 + searchResult.impactScore;
-    searchDerivedScore = Math.max(0, Math.min(100, searchDerivedScore));
-    
-    totalAiScore += searchDerivedScore * 0.30;
-    totalWeight += 0.30;
-  }
-
-  // Normalize final score
   if (totalWeight > 0) {
     return Math.max(0, Math.min(100, Math.round(totalAiScore / totalWeight)));
   }
   
-  return 50; // Neutral fallback if nothing worked
+  return 50; 
 }
 
-/**
- * Bonus: Explains why this content is flagged as AI-generated.
- * Returns an array of strings as requested, which are then joined for the DB.
- */
-function buildAiExplanation(finalAiScore, { imageResult, textResult, searchResult }) {
+function buildAiExplanation(finalAiScore, { imageResult, videoResult, textResult }) {
   const explanationList = [];
 
   // 1. Overall Verdict
@@ -63,30 +54,23 @@ function buildAiExplanation(finalAiScore, { imageResult, textResult, searchResul
     explanationList.push("Verdict: This content is LIKELY AUTHENTIC with very low AI indicators.");
   }
 
-  // 2. Image Signals
-  if (imageResult && imageResult.flags.length > 0) {
+  // 2. Image / Video Signals
+  const primaryResult = imageResult || videoResult;
+  if (primaryResult && primaryResult.flags.length > 0) {
+    const typeLabel = imageResult ? "Image Analysis" : "Video Analysis";
     explanationList.push(
-      `Image Analysis (${imageResult.confidence} confidence): Detected - ${imageResult.flags.join(", ")}.`
+      `${typeLabel} (${primaryResult.confidence} confidence): Detected - ${primaryResult.flags.join(", ")}.`
     );
   }
 
   // 3. Text Signals
-  if (textResult && textResult.flags.length > 0) {
+  if (textResult && textResult.flags && textResult.flags.length > 0) {
     explanationList.push(
       `Text Analysis (Credibility Score: ${textResult.credibilityScore}%): Issues found - ${textResult.flags.join(", ")}.`
     );
   }
 
-  // 4. Reverse Search Signals
-  if (searchResult) {
-    if (searchResult.matchCount === 0) {
-      explanationList.push("Reverse Search: ZERO matches found on the web, increasing AI likelihood.");
-    } else {
-      explanationList.push(`Reverse Search: Found ${searchResult.matchCount} similar matches across ${searchResult.sources.length} sources (e.g., ${searchResult.sources[0]}), which decreases AI likelihood.`);
-    }
-  }
-
-  return explanationList; // Returns string[] as requested in prompt Bonus
+  return explanationList; 
 }
 
 /* ── POST /api/analyze/file ── */
@@ -99,17 +83,19 @@ async function analyzeFile(req, res, next) {
     const isVideo = req.file.mimetype.startsWith("video/");
     const inputType = isVideo ? "video" : "image";
 
-    // Run deep analysis concurrently
-    const [imageResult, searchResult] = await Promise.all([
-      analyzeImage(req.file.buffer, req.file.mimetype),
-      reverseSearch(req.file.buffer),
-    ]);
+    let imageResult = null;
+    let videoResult = null;
 
-    const finalAiProbability = computeCombinedScore({ imageResult, searchResult });
+    if (isVideo) {
+      videoResult = await analyzeVideo(req.file.buffer);
+    } else {
+      imageResult = await analyzeImage(req.file.buffer, req.file.mimetype);
+    }
+
+    const finalAiProbability = computeCombinedScore({ imageResult, videoResult });
     const finalTrustScore = Math.max(0, 100 - finalAiProbability);
     
-    // Build explanation string array and join for the database schema string
-    const explanationArr = buildAiExplanation(finalAiProbability, { imageResult, searchResult });
+    const explanationArr = buildAiExplanation(finalAiProbability, { imageResult, videoResult });
     const finalExplanationStr = explanationArr.join(" ");
 
     const analysis = await Analysis.create({
@@ -120,7 +106,8 @@ async function analyzeFile(req, res, next) {
       explanation: finalExplanationStr,
       details: {
         imageAnalysis: imageResult,
-        reverseSearch: searchResult,
+        videoAnalysis: videoResult,
+        reverseSearch: null,
       },
     });
 
@@ -139,22 +126,36 @@ async function analyzeUrl(req, res, next) {
     }
 
     const scraped = await scrapeUrl(url);
-    const textResult = await analyzeText(scraped.bodyText);
+    
+    // Ignore text for now per user requirements
+    const textResult = null;
 
     let imageResult = null;
-    let searchResult = null;
+    let videoResult = null;
 
-    if (scraped.ogImage) {
-      // In a real system we'd download the OG image and analyze it
-      // For this MVP, if there is an image URL we just simulate an empty buffer to trigger logic
-      imageResult = await analyzeImage(Buffer.alloc(10), "image/jpeg");
-      searchResult = await reverseSearch(Buffer.alloc(10));
+    const isVideoUrl = !!url.match(/\.(mp4|webm|mov|avi)$/i) || !!scraped.ogVideo;
+    const targetUrl = isVideoUrl ? (scraped.ogVideo || url) : (scraped.ogImage || url);
+
+    if (targetUrl) {
+      try {
+        const fileRes = await axios.get(targetUrl, { responseType: 'arraybuffer' });
+        const fileBuffer = Buffer.from(fileRes.data);
+        const mimeType = fileRes.headers['content-type'] || (isVideoUrl ? 'video/mp4' : 'image/jpeg');
+        
+        if (mimeType.startsWith('video/') || isVideoUrl) {
+          videoResult = await analyzeVideo(fileBuffer);
+        } else {
+          imageResult = await analyzeImage(fileBuffer, mimeType);
+        }
+      } catch (err) {
+        console.error("Failed to download URL target:", err.message);
+      }
     }
 
-    const finalAiProbability = computeCombinedScore({ imageResult, textResult, searchResult });
+    const finalAiProbability = computeCombinedScore({ imageResult, videoResult, textResult });
     const finalTrustScore = Math.max(0, 100 - finalAiProbability);
     
-    const explanationArr = buildAiExplanation(finalAiProbability, { imageResult, textResult, searchResult });
+    const explanationArr = buildAiExplanation(finalAiProbability, { imageResult, videoResult, textResult });
     const finalExplanationStr = explanationArr.join(" ");
 
     const analysis = await Analysis.create({
@@ -165,11 +166,12 @@ async function analyzeUrl(req, res, next) {
       explanation: finalExplanationStr,
       details: {
         imageAnalysis: imageResult,
-        textAnalysis: {
+        videoAnalysis: videoResult,
+        textAnalysis: textResult ? {
           ...textResult,
           scrapedTitle: scraped.title,
-        },
-        reverseSearch: searchResult
+        } : null,
+        reverseSearch: null
       },
     });
 

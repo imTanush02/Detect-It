@@ -1,0 +1,24 @@
+{
+  "inputType": "url",
+  "inputSource": "https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/transformers/rabbit.png",
+  "aiScore": 40,
+  "trustScore": 60,
+  "explanation": "Verdict: This content shows MODERATE mixed signals of manipulation. Text Analysis (Credibility Score: 60%): Issues found - Excessive exclamation marks detected, High frequency of rhetorical questions.",
+  "details": {
+    "imageAnalysis": null,
+    "textAnalysis": {
+      "aiScore": 40,
+      "credibilityScore": 60,
+      "flags": [
+        "Excessive exclamation marks detected",
+        "High frequency of rhetorical questions"
+      ],
+      "scrapedTitle": ""
+    },
+    "reverseSearch": null
+  },
+  "_id": "69c3760da08a484db0509b73",
+  "createdAt": "2026-03-25T05:43:41.981Z",
+  "updatedAt": "2026-03-25T05:43:41.981Z",
+  "__v": 0
+}

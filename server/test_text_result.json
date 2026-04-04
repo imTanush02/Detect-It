@@ -1,0 +1,43 @@
+﻿{
+    "inputType":  "text",
+    "inputSource":  "Artificial intelligence has become an increasingly transformative force in modern society. It is imp...",
+    "aiScore":  80,
+    "trustScore":  20,
+    "explanation":  "Verdict: This text has a HIGH probability of being AI-generated (80% AI likelihood). Text exhibits characteristics of AI-generated content due to its formal tone and generic phrasing. Signals: NVIDIA AI Detection: AI-generated (80% AI, 70% confidence); Found high density of typical AI phrases (8 instances); Low sentence length variance (uniform structure typical of AI); Overly formal and structured tone; Generic and predictable phrasing",
+    "details":  {
+                    "textAnalysis":  {
+                                         "aiScore":  80,
+                                         "credibilityScore":  20,
+                                         "flags":  [
+                                                       "NVIDIA AI Detection: AI-generated (80% AI, 70% confidence)",
+                                                       "Found high density of typical AI phrases (8 instances)",
+                                                       "Low sentence length variance (uniform structure typical of AI)",
+                                                       "Overly formal and structured tone",
+                                                       "Generic and predictable phrasing"
+                                                   ]
+                                     },
+                    "nvidiaAnalysis":  {
+                                           "ai_probability":  80,
+                                           "confidence":  70,
+                                           "verdict":  "AI-generated",
+                                           "signals":  {
+                                                           "repetition":  false,
+                                                           "low_burstiness":  true,
+                                                           "unnatural_tone":  true,
+                                                           "generic_phrasing":  true
+                                                       },
+                                           "reasons":  [
+                                                           "Overly formal and structured tone",
+                                                           "Generic and predictable phrasing"
+                                                       ],
+                                           "summary":  "Text exhibits characteristics of AI-generated content due to its formal tone and generic phrasing."
+                                       },
+                    "imageAnalysis":  null,
+                    "videoAnalysis":  null,
+                    "reverseSearch":  null
+                },
+    "_id":  "69d0f626628ca600ba6f8305",
+    "createdAt":  "2026-04-04T11:29:42.232Z",
+    "updatedAt":  "2026-04-04T11:29:42.232Z",
+    "__v":  0
+}

@@ -217,4 +217,73 @@ async function getAnalysisById(req, res, next) {
   }
 }
 
-module.exports = { analyzeFile, analyzeUrl, getHistory, getAnalysisById };
+/* ── POST /api/analyze/text ── */
+async function analyzeTextInput(req, res, next) {
+  try {
+    const { text } = req.body;
+    if (!text || text.trim().length < 20) {
+      return res.status(400).json({ error: "Text is required (minimum 20 characters)" });
+    }
+
+    const textResult = await analyzeText(text.trim());
+
+    if (!textResult) {
+      return res.status(500).json({ error: "Text analysis failed" });
+    }
+
+    const finalAiProbability = textResult.aiScore;
+    const finalTrustScore = Math.max(0, 100 - finalAiProbability);
+
+    const explanationArr = [];
+
+    if (textResult.nvidiaResult) {
+      const nv = textResult.nvidiaResult;
+      if (nv.verdict === "AI-generated") {
+        explanationArr.push(`Verdict: This text has a HIGH probability of being AI-generated (${nv.ai_probability}% AI likelihood).`);
+      } else if (nv.verdict === "Human-written") {
+        explanationArr.push(`Verdict: This text is LIKELY HUMAN-WRITTEN with low AI indicators (${nv.ai_probability}% AI likelihood).`);
+      } else {
+        explanationArr.push(`Verdict: This text shows UNCERTAIN / mixed signals (${nv.ai_probability}% AI likelihood).`);
+      }
+      if (nv.summary) {
+        explanationArr.push(nv.summary);
+      }
+    } else {
+      if (finalAiProbability >= 75) {
+        explanationArr.push("Verdict: This text has a HIGH probability of being AI-generated (heuristic analysis only).");
+      } else if (finalAiProbability >= 40) {
+        explanationArr.push("Verdict: This text shows MODERATE mixed signals of AI generation (heuristic analysis only).");
+      } else {
+        explanationArr.push("Verdict: This text is LIKELY AUTHENTIC with very low AI indicators (heuristic analysis only).");
+      }
+    }
+
+    if (textResult.flags.length > 0) {
+      explanationArr.push(`Signals: ${textResult.flags.join("; ")}`);
+    }
+
+    const inputPreview = text.trim().slice(0, 100) + (text.trim().length > 100 ? "..." : "");
+
+    const analysis = await Analysis.create({
+      inputType: "text",
+      inputSource: inputPreview,
+      aiScore: finalAiProbability,
+      trustScore: finalTrustScore,
+      explanation: explanationArr.join(" "),
+      details: {
+        textAnalysis: {
+          aiScore: textResult.aiScore,
+          credibilityScore: textResult.credibilityScore,
+          flags: textResult.flags,
+        },
+        nvidiaAnalysis: textResult.nvidiaResult || null,
+      },
+    });
+
+    res.status(201).json(analysis);
+  } catch (err) {
+    next(err);
+  }
+}
+
+module.exports = { analyzeFile, analyzeUrl, analyzeTextInput, getHistory, getAnalysisById };

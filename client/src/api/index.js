@@ -21,6 +21,12 @@ export async function analyzeUrl(url) {
   return data;
 }
 
+/** Analyze raw text for AI-generation signals */
+export async function analyzeText(text) {
+  const { data } = await api.post("/analyze/text", { text });
+  return data;
+}
+
 /** Fetch paginated history */
 export async function fetchHistory(page = 1, limit = 12) {
   const { data } = await api.get("/history", { params: { page, limit } });

@@ -4,7 +4,7 @@ const analysisSchema = new mongoose.Schema(
   {
     inputType: {
       type: String,
-      enum: ["image", "video", "url"],
+      enum: ["image", "video", "url", "text"],
       required: true,
     },
     inputSource: {
@@ -29,7 +29,9 @@ const analysisSchema = new mongoose.Schema(
     },
     details: {
       imageAnalysis: { type: Object, default: null },
+      videoAnalysis: { type: Object, default: null },
       textAnalysis: { type: Object, default: null },
+      nvidiaAnalysis: { type: Object, default: null },
       reverseSearch: { type: Object, default: null },
     },
   },

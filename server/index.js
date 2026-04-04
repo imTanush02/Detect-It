@@ -27,13 +27,14 @@ app.use(errorHandler);
 /* ── Database + Server ── */
 const warmUp = async () => {
   const axios = require('axios');
+  // HuggingFace ViT warmup
   try {
     await axios.post(
       "https://api-inference.huggingface.co/models/google/vit-base-patch16-224",
-      Buffer.alloc(10), // tiny dummy payload
+      Buffer.alloc(10),
       {
         headers: { Authorization: `Bearer ${process.env.HUGGINGFACE_API_KEY}` },
-        timeout: 10000 // quick timeout for warmup just to wake it
+        timeout: 10000
       }
     );
     console.log("🔥 HF ViT Model Warmed up");
@@ -43,6 +44,25 @@ const warmUp = async () => {
     } else {
       console.log("🔥 HF Warmup ping sent (expected to error on dummy buffer)");
     }
+  }
+
+  // NVIDIA API key validation
+  if (process.env.NVIDIA_API_KEY) {
+    try {
+      await axios.get("https://integrate.api.nvidia.com/v1/models", {
+        headers: { Authorization: `Bearer ${process.env.NVIDIA_API_KEY}` },
+        timeout: 10000
+      });
+      console.log("⚡ NVIDIA NIM API key verified");
+    } catch (e) {
+      if (e.response?.status === 401 || e.response?.status === 403) {
+        console.warn("⚠️  NVIDIA API key is invalid or expired");
+      } else {
+        console.log("⚡ NVIDIA API ping sent (connectivity check)");
+      }
+    }
+  } else {
+    console.warn("⚠️  NVIDIA_API_KEY not set — text ML detection will use heuristics only");
   }
 };
 

@@ -5,6 +5,7 @@ const upload = require("../middleware/upload");
 const {
   analyzeFile,
   analyzeUrl,
+  analyzeTextInput,
   getHistory,
   getAnalysisById,
 } = require("../controllers/analysisController");
@@ -14,6 +15,9 @@ router.post("/analyze/file", upload.single("file"), analyzeFile);
 
 /* URL analysis */
 router.post("/analyze/url", analyzeUrl);
+
+/* Text-only analysis (NVIDIA AI detection) */
+router.post("/analyze/text", analyzeTextInput);
 
 /* Paginated history */
 router.get("/history", getHistory);

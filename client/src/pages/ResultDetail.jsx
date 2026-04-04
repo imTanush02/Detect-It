@@ -22,6 +22,40 @@ function FlagBadge({ text }) {
   );
 }
 
+function SignalIndicator({ label, active }) {
+  return (
+    <div className="flex items-center justify-between p-2.5 rounded-lg bg-white/[0.02]">
+      <span className="text-xs text-white/60">{label}</span>
+      <span className={`text-xs font-bold ${active ? "text-red-400" : "text-green-400"}`}>
+        {active ? "⚠ Detected" : "✓ Clear"}
+      </span>
+    </div>
+  );
+}
+
+function VerdictBadge({ verdict }) {
+  const styles = {
+    "AI-generated": "bg-red-500/15 border-red-500/30 text-red-300",
+    "Human-written": "bg-emerald-500/15 border-emerald-500/30 text-emerald-300",
+    "Uncertain": "bg-amber-500/15 border-amber-500/30 text-amber-300",
+  };
+  const icons = {
+    "AI-generated": "🤖",
+    "Human-written": "✅",
+    "Uncertain": "🔍",
+  };
+
+  const style = styles[verdict] || styles["Uncertain"];
+  const icon = icons[verdict] || "🔍";
+
+  return (
+    <span className={`inline-flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-bold border ${style}`}>
+      <span>{icon}</span>
+      {verdict}
+    </span>
+  );
+}
+
 export default function ResultDetail() {
   const { id } = useParams();
   const [data, setData] = useState(null);
@@ -73,6 +107,7 @@ export default function ResultDetail() {
 
   const imageAnalysis = details?.imageAnalysis;
   const textAnalysis = details?.textAnalysis;
+  const nvidiaAnalysis = details?.nvidiaAnalysis;
   const reverseSearch = details?.reverseSearch;
 
   return (
@@ -97,8 +132,11 @@ export default function ResultDetail() {
           <span className="text-xs text-white/25">{date}</span>
         </div>
         <h1 className="text-2xl sm:text-3xl font-bold text-white break-all">
-          {inputSource}
+          {inputType === "text" ? "Text Analysis" : inputSource}
         </h1>
+        {inputType === "text" && (
+          <p className="mt-2 text-sm text-white/40 line-clamp-3">{inputSource}</p>
+        )}
       </div>
 
       {/* Score gauges */}
@@ -107,6 +145,13 @@ export default function ResultDetail() {
           <ScoreGauge score={aiScore} label="AI Probability" />
           <ScoreGauge score={trustScore} label="Trust Score" />
         </div>
+
+        {/* Verdict badge for NVIDIA results */}
+        {nvidiaAnalysis && (
+          <div className="mt-6 flex justify-center">
+            <VerdictBadge verdict={nvidiaAnalysis.verdict} />
+          </div>
+        )}
       </div>
 
       {/* Explanation */}
@@ -116,6 +161,60 @@ export default function ResultDetail() {
 
       {/* Detail breakdown */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-5 mt-5">
+
+        {/* NVIDIA AI Detection */}
+        {nvidiaAnalysis && (
+          <DetailCard title="NVIDIA AI Detection">
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="text-xs text-white/40">Provider</span>
+                <span className="text-xs font-medium text-white/70">NVIDIA NIM (Llama 3.3 70B)</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-xs text-white/40">AI Probability</span>
+                <span className="text-xs font-bold text-white/80">{nvidiaAnalysis.ai_probability}%</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-xs text-white/40">Confidence</span>
+                <span className="text-xs font-bold text-white/80">{nvidiaAnalysis.confidence}%</span>
+              </div>
+
+              {/* Signal indicators */}
+              {nvidiaAnalysis.signals && (
+                <div className="pt-2 space-y-1.5">
+                  <span className="text-xs text-white/40">Detection Signals</span>
+                  <SignalIndicator label="Repetition" active={nvidiaAnalysis.signals.repetition} />
+                  <SignalIndicator label="Low Burstiness" active={nvidiaAnalysis.signals.low_burstiness} />
+                  <SignalIndicator label="Unnatural Tone" active={nvidiaAnalysis.signals.unnatural_tone} />
+                  <SignalIndicator label="Generic Phrasing" active={nvidiaAnalysis.signals.generic_phrasing} />
+                </div>
+              )}
+
+              {/* Reasons */}
+              {nvidiaAnalysis.reasons?.length > 0 && (
+                <div className="pt-2 space-y-2">
+                  <span className="text-xs text-white/40">Reasoning</span>
+                  <ul className="space-y-1">
+                    {nvidiaAnalysis.reasons.map((r, i) => (
+                      <li key={i} className="text-xs text-white/60 flex items-start gap-2">
+                        <span className="text-brand-400 mt-0.5">›</span>
+                        <span>{r}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              {/* Summary */}
+              {nvidiaAnalysis.summary && (
+                <div className="pt-2 p-3 rounded-lg bg-white/[0.03] border border-white/5">
+                  <p className="text-xs text-white/50 italic">"{nvidiaAnalysis.summary}"</p>
+                </div>
+              )}
+            </div>
+          </DetailCard>
+        )}
+
         {/* Image analysis */}
         {imageAnalysis && (
           <DetailCard title="Image Analysis">
@@ -146,21 +245,21 @@ export default function ResultDetail() {
           </DetailCard>
         )}
 
-        {/* Text analysis */}
+        {/* Text analysis (heuristic) */}
         {textAnalysis && (
-          <DetailCard title="Text Analysis">
+          <DetailCard title="Text Heuristic Analysis">
             <div className="space-y-3">
               <div className="flex items-center justify-between">
-                <span className="text-xs text-white/40">Provider</span>
-                <span className="text-xs font-medium text-white/70">{textAnalysis.provider}</span>
+                <span className="text-xs text-white/40">Method</span>
+                <span className="text-xs font-medium text-white/70">Heuristic Engine</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-xs text-white/40">AI Score</span>
+                <span className="text-xs font-bold text-white/80">{textAnalysis.aiScore}%</span>
               </div>
               <div className="flex items-center justify-between">
                 <span className="text-xs text-white/40">Credibility</span>
                 <span className="text-xs font-bold text-white/80">{textAnalysis.credibilityScore}%</span>
-              </div>
-              <div className="flex items-center justify-between">
-                <span className="text-xs text-white/40">Sentiment</span>
-                <span className="text-xs font-medium text-white/70 capitalize">{textAnalysis.sentiment}</span>
               </div>
               {textAnalysis.scrapedTitle && (
                 <div className="flex items-center justify-between">

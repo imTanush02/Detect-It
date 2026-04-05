@@ -34,9 +34,9 @@ async function analyzeSightengine(fileBuffer, originalFilename = 'file.jpg') {
       return createFallbackResponse();
     }
 
-    // Safely extract scores based on documentation
-    const aiGeneratedScore = (data.genai?.score || 0) * 100;
-    const deepfakeScore = (data.deepfake?.score || 0) * 100;
+    // Safely extract scores based on documentation (they are in data.type object)
+    const aiGeneratedScore = (data.type?.ai_generated || 0) * 100;
+    const deepfakeScore = (data.type?.deepfake || 0) * 100;
 
     // Adjust scoring logic using weighted average
     const finalScore = Math.round(0.7 * aiGeneratedScore + 0.3 * deepfakeScore);

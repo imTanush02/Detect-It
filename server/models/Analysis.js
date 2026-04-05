@@ -38,4 +38,7 @@ const analysisSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
+// Auto-delete documents after 1 hour (3600 seconds) — keeps it stateless
+analysisSchema.index({ createdAt: 1 }, { expireAfterSeconds: 3600 });
+
 module.exports = mongoose.model("Analysis", analysisSchema);

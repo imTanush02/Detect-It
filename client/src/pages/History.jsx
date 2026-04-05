@@ -24,7 +24,7 @@ export default function History() {
         <div>
           <h1 className="text-3xl font-bold text-white">Analysis History</h1>
           <p className="text-sm text-white/40 mt-1">
-            {data ? `${data.totalResults} total analyses` : "Loading..."}
+            {data ? `${data.totalResults} analyse${data.totalResults !== 1 ? 's' : ''} · auto-expires after 1 hour` : "Loading..."}
           </p>
         </div>
       </div>
@@ -90,7 +90,10 @@ export default function History() {
       {!loading && data && data.results.length === 0 && (
         <div className="text-center py-20">
           <div className="text-5xl mb-4">🔍</div>
-          <p className="text-lg font-semibold text-white/60">No analyses yet</p>
+          <p className="text-lg font-semibold text-white/60">No recent analyses</p>
+          <p className="text-sm text-white/30 mt-1">
+            Results are kept for 1 hour, then automatically cleared.
+          </p>
           <p className="text-sm text-white/30 mt-1">
             Upload a file or paste a URL on the home page to get started.
           </p>

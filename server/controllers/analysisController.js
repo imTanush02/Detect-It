@@ -12,9 +12,6 @@ const { analyzeText } = require("../services/textAnalysis");
 const { scrapeUrl } = require("../services/urlScraper");
 const axios = require("axios");
 
-/**
- * Combines individual scores into a final Multi-Signal AI probability score.
- */
 function computeCombinedScore({ imageResult, videoResult, textResult }) {
   let totalAiScore = 0;
   let totalWeight = 0;
@@ -22,7 +19,7 @@ function computeCombinedScore({ imageResult, videoResult, textResult }) {
   const primaryResult = imageResult || videoResult;
 
   // We prioritize the ML model heavily if it was confident.
-  let primaryWeight = (primaryResult && primaryResult.confidence && primaryResult.confidence.toLowerCase() === "high") ? 0.85 : 0.60;
+  let primaryWeight = (primaryResult && primaryResult.confidenceStr && primaryResult.confidenceStr.toLowerCase() === "high") ? 0.85 : 0.60;
   let textWeight = 1.0 - primaryWeight;
 
   if (primaryResult) {
@@ -40,6 +37,48 @@ function computeCombinedScore({ imageResult, videoResult, textResult }) {
   }
   
   return 50; 
+}
+
+async function generateMediaExplanation(aiGeneratedScore, deepfakeScore) {
+  const { NVIDIA_API_KEY } = process.env;
+  if (!NVIDIA_API_KEY) {
+    return "NVIDIA API Key missing. No detailed explanation available.";
+  }
+  try {
+    const prompt = `Analyze the detection signals:
+AI Generated Score: ${aiGeneratedScore}
+Deepfake Score: ${deepfakeScore}
+
+Explain why this content may be AI-generated.
+
+Focus on:
+* visual artifacts
+* texture inconsistencies
+* unnatural patterns
+
+Return 3 concise bullet points. Avoid generic statements.`;
+
+    const response = await axios.post(
+      "https://integrate.api.nvidia.com/v1/chat/completions",
+      {
+        model: "meta/llama-3.3-70b-instruct",
+        messages: [{ role: "user", content: prompt }],
+        temperature: 0.3,
+        max_tokens: 256,
+      },
+      {
+        headers: {
+          "Authorization": `Bearer ${NVIDIA_API_KEY}`,
+          "Content-Type": "application/json"
+        },
+        timeout: 15000
+      }
+    );
+    return response.data?.choices?.[0]?.message?.content?.trim() || "No detailed explanation provided.";
+  } catch (err) {
+    console.error("Explanation generation failed:", err.message);
+    return "Explanation generation failed due to an API error.";
+  }
 }
 
 function buildAiExplanation(finalAiScore, { imageResult, videoResult, textResult }) {
@@ -95,8 +134,24 @@ async function analyzeFile(req, res, next) {
     const finalAiProbability = computeCombinedScore({ imageResult, videoResult });
     const finalTrustScore = Math.max(0, 100 - finalAiProbability);
     
-    const explanationArr = buildAiExplanation(finalAiProbability, { imageResult, videoResult });
-    const finalExplanationStr = explanationArr.join(" ");
+    let finalExplanationStr = "";
+    let aiGenScore = 0;
+    let deepfScore = 0;
+    let isFallback = false;
+
+    const primaryResult = imageResult || videoResult;
+    if (primaryResult && primaryResult.sightengineData) {
+      aiGenScore = primaryResult.sightengineData.signals.aiGenerated || 0;
+      deepfScore = primaryResult.sightengineData.signals.deepfake || 0;
+      isFallback = primaryResult.sightengineData.fallbackUsed || false;
+    }
+
+    if (!isFallback && (aiGenScore > 0 || deepfScore > 0)) {
+      finalExplanationStr = await generateMediaExplanation(aiGenScore, deepfScore);
+    } else {
+      const explanationArr = buildAiExplanation(finalAiProbability, { imageResult, videoResult });
+      finalExplanationStr = explanationArr.join(" ");
+    }
 
     const analysis = await Analysis.create({
       inputType,
@@ -108,6 +163,9 @@ async function analyzeFile(req, res, next) {
         imageAnalysis: imageResult,
         videoAnalysis: videoResult,
         reverseSearch: null,
+        aiGenerated: aiGenScore,
+        deepfake: deepfScore,
+        fallbackUsed: isFallback,
       },
     });
 
@@ -155,8 +213,24 @@ async function analyzeUrl(req, res, next) {
     const finalAiProbability = computeCombinedScore({ imageResult, videoResult, textResult });
     const finalTrustScore = Math.max(0, 100 - finalAiProbability);
     
-    const explanationArr = buildAiExplanation(finalAiProbability, { imageResult, videoResult, textResult });
-    const finalExplanationStr = explanationArr.join(" ");
+    let finalExplanationStr = "";
+    let aiGenScore = 0;
+    let deepfScore = 0;
+    let isFallback = false;
+
+    const primaryResult = imageResult || videoResult;
+    if (primaryResult && primaryResult.sightengineData) {
+      aiGenScore = primaryResult.sightengineData.signals.aiGenerated || 0;
+      deepfScore = primaryResult.sightengineData.signals.deepfake || 0;
+      isFallback = primaryResult.sightengineData.fallbackUsed || false;
+    }
+
+    if (!isFallback && (aiGenScore > 0 || deepfScore > 0)) {
+      finalExplanationStr = await generateMediaExplanation(aiGenScore, deepfScore);
+    } else {
+      const explanationArr = buildAiExplanation(finalAiProbability, { imageResult, videoResult, textResult });
+      finalExplanationStr = explanationArr.join(" ");
+    }
 
     const analysis = await Analysis.create({
       inputType: "url",
@@ -171,7 +245,10 @@ async function analyzeUrl(req, res, next) {
           ...textResult,
           scrapedTitle: scraped.title,
         } : null,
-        reverseSearch: null
+        reverseSearch: null,
+        aiGenerated: aiGenScore,
+        deepfake: deepfScore,
+        fallbackUsed: isFallback,
       },
     });
 

@@ -4,6 +4,7 @@ const os = require('os');
 const { exec } = require('child_process');
 const crypto = require('crypto');
 const util = require('util');
+const ffmpegPath = require('ffmpeg-static');
 const { analyzeImage } = require('./imageAnalysis');
 
 const execPromise = util.promisify(exec);
@@ -28,18 +29,14 @@ async function analyzeVideo(fileBuffer) {
     fs.writeFileSync(videoPath, fileBuffer);
 
     // 3. Extract 3-5 frames using ffmpeg
-    // We grab up to 3 frames spaced out natively using a simple thumbnail filter or just taking the first 3.
-    // To ensure we get frames spaced out, we use fps=1.
-    // If exact spacing is needed, this is tricky via basic ffmpeg, but 'thumbnail' is a fast safe bet.
-    // Wait, simple approaches works best. Let's get 3 frames natively.
-    const extractCmd = `ffmpeg -y -i "${videoPath}" -vframes 5 "${framePattern}"`;
+    const extractCmd = `"${ffmpegPath}" -y -i "${videoPath}" -vf "fps=1" -vframes 3 "${framePattern}"`;
     
     try {
       await execPromise(extractCmd);
     } catch (ffmpegErr) {
       console.warn("FFMPEG execution failed. Ensure ffmpeg is installed and in PATH:", ffmpegErr.message);
       flags.push("Failed to extract video frames via FFMPEG. FFMPEG must be installed locally.");
-      return { aiScore: 50, frameScores: [], flags, confidence: "low" };
+      return { aiScore: 50, frameScores: [], flags, confidence: "low", confidenceStr: "low" };
     }
 
     // 4. Read frames back from disk
@@ -56,24 +53,38 @@ async function analyzeVideo(fileBuffer) {
 
     if (framesToProcess.length === 0) {
       flags.push("FFMPEG succeeded but generated 0 frames.");
-      return { aiScore: 50, frameScores: [], flags, confidence: "low" };
+      // Edge Case: No frames
+      return { aiScore: 50, frameScores: [], flags, confidence: "low", confidenceStr: "low", fallbackUsed: true };
     }
 
     // 5. Process EACH frame via imageAnalysis
-    // Process sequentially to avoid HF free-tier concurrent stream aborts
     const results = [];
     for (const frame of framesToProcess) {
       const res = await analyzeImage(frame.buffer, "image/jpeg");
-      results.push(res);
+      // Skip failed frame logic
+      if (res.sightengineData && !res.sightengineData.fallbackUsed) {
+        results.push(res);
+      } else {
+        // If it's a fallback result, we can still record it but maybe log it
+        console.warn(`Frame failed Sightengine check.`);
+      }
     }
 
     // 6. Average the scores
     let totalScore = 0;
+    
+    if (results.length === 0) {
+      // Edge Case: All frames failed or generated fallback
+      flags.push("All frames failed API analysis. Returning fallback.");
+      return { aiScore: 50, frameScores: [], flags, confidence: "low", confidenceStr: "low", fallbackUsed: true };
+    }
+    
     results.forEach((res, index) => {
       frameScores.push(res.aiScore);
       totalScore += res.aiScore;
       if (res.flags && res.flags.length > 0) {
-        flags.push(`Frame ${index + 1}: ${res.flags[0]}...`); // Only grab the most prominent flag per frame
+        // Collect primary flag
+        flags.push(`Frame ${index + 1}: ${res.flags[0]}`); 
       }
     });
 
@@ -84,9 +95,27 @@ async function analyzeVideo(fileBuffer) {
       try { fs.unlinkSync(f.path); } catch(e){}
     });
 
+    // Provide highest confidence from frames or evaluate total
+    let finalConfidenceStr = "low";
+    let finalConfidence = 0.35;
+    if (aiScore > 80) { finalConfidenceStr = "high"; finalConfidence = 0.95; }
+    else if (aiScore > 50) { finalConfidenceStr = "medium"; finalConfidence = 0.65; }
+
+    return {
+      aiScore,
+      frameScores,
+      flags,
+      confidence: finalConfidence,
+      confidenceStr: finalConfidenceStr,
+      provider: "Sightengine (Multi-Frame)",
+      aiProbability: aiScore,
+      sightengineData: results.length > 0 ? results[0].sightengineData : null // Use first valid as proxy for detailed signals
+    };
+
   } catch (err) {
     console.error("Video processing error:", err.message);
     flags.push("Fatal error occurred extracting video frames: " + err.message);
+    return { aiScore: 50, frameScores: [], flags, confidence: "low", confidenceStr: "low", fallbackUsed: true };
   } finally {
     // Cleanup Temp Video
     try {
@@ -95,13 +124,7 @@ async function analyzeVideo(fileBuffer) {
       }
     } catch (cleanErr) {}
   }
-
-  return {
-    aiScore,
-    frameScores,
-    flags,
-    confidence: "medium"
-  };
 }
 
 module.exports = { analyzeVideo };
+

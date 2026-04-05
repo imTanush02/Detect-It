@@ -4,7 +4,7 @@ const FormData = require('form-data');
 
 async function testUpload() {
   try {
-    const filePath = 'e:\\SHRiyans\\Detect-It\\client\\public\\vite.svg'; // some dummy image
+    const filePath = 'e:\\SHRiyans\\Detect-It\\server\\dummy.jpg';
     const form = new FormData();
     form.append('file', fs.createReadStream(filePath));
 

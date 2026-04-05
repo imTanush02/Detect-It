@@ -27,23 +27,11 @@ app.use(errorHandler);
 /* ── Database + Server ── */
 const warmUp = async () => {
   const axios = require('axios');
-  // HuggingFace ViT warmup
-  try {
-    await axios.post(
-      "https://api-inference.huggingface.co/models/google/vit-base-patch16-224",
-      Buffer.alloc(10),
-      {
-        headers: { Authorization: `Bearer ${process.env.HUGGINGFACE_API_KEY}` },
-        timeout: 10000
-      }
-    );
-    console.log("🔥 HF ViT Model Warmed up");
-  } catch (e) {
-    if (e.response?.status === 503) {
-      console.log("🔥 HF ViT Model is booting up (expected warmup behavior)");
-    } else {
-      console.log("🔥 HF Warmup ping sent (expected to error on dummy buffer)");
-    }
+  // Sightengine credentials check
+  if (process.env.SIGHTENGINE_API_USER && process.env.SIGHTENGINE_API_SECRET) {
+    console.log("🔥 Sightengine API Keys verified");
+  } else {
+    console.warn("⚠️  Sightengine API credentials missing — media detection will use fallback heuristics");
   }
 
   // NVIDIA API key validation
@@ -66,10 +54,14 @@ const warmUp = async () => {
   }
 };
 
+const Analysis = require("./models/Analysis");
+
 mongoose
   .connect(process.env.MONGO_URI)
-  .then(() => {
+  .then(async () => {
     console.log("✅ MongoDB connected");
+    await Analysis.syncIndexes(); // Ensures TTL index is applied
+    console.log("🗑️  TTL index synced — analyses auto-expire after 1 hour");
     warmUp(); // Trigger warmup async
     app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
   })
